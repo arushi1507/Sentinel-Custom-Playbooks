@@ -1,0 +1,11 @@
+{
+  "workspaceSubscriptionId": {
+    "value": "<your-subscription-id>"
+  },
+  "workspaceResourceGroup": {
+    "value": "<your-rg>"
+  },
+  "workspaceName": {
+    "value": "<your-workspace>"
+  }
+}
