@@ -1,0 +1,241 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workflows_la_sentinel_close_incidents_older_than_7d_name": {
+            "defaultValue": "la-sentinel-close-incidents-older-than-7d",
+            "type": "String"
+        }
+    },
+    "variables": {},
+    "resources": [
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('workflows_la_sentinel_close_incidents_older_than_7d_name')]",
+            "location": "eastus",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "olderThanDays": {
+                            "defaultValue": 7,
+                            "type": "Int"
+                        },
+                        "dryRun": {
+                            "defaultValue": true,
+                            "type": "Bool"
+                        },
+                        "topToFetch": {
+                            "defaultValue": 1000,
+                            "type": "Int"
+                        },
+                        "apiVersionSecurityInsights": {
+                            "defaultValue": "2025-09-01",
+                            "type": "String"
+                        },
+                        "workspaceSubscriptionId": {
+                            "defaultValue": "72fdca38-1ca4-4843-8422-5261bb40888d",
+                            "type": "String"
+                        },
+                        "workspaceResourceGroup": {
+                            "defaultValue": "RG-1",
+                            "type": "String"
+                        },
+                        "workspaceName": {
+                            "defaultValue": "LG-01",
+                            "type": "String"
+                        },
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "Recurrence": {
+                            "recurrence": {
+                                "frequency": "Day",
+                                "interval": 1
+                            },
+                            "evaluatedRecurrence": {
+                                "frequency": "Day",
+                                "interval": 1
+                            },
+                            "type": "Recurrence"
+                        }
+                    },
+                    "actions": {
+                        "List_Incidents_Older_Than_Cutoff_And_NotClosed": {
+                            "runAfter": {
+                                "Initialize_DryRunList": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Http",
+                            "inputs": {
+                                "uri": "@{concat('https://management.azure.com/subscriptions/', parameters('workspaceSubscriptionId'), '/resourceGroups/', parameters('workspaceResourceGroup'), '/providers/Microsoft.OperationalInsights/workspaces/', parameters('workspaceName'), '/providers/Microsoft.SecurityInsights/incidents?api-version=', parameters('apiVersionSecurityInsights'), '&$top=', string(parameters('topToFetch')), '&$orderby=', encodeUriComponent('properties/createdTimeUtc asc'), '&$filter=', encodeUriComponent(concat('properties/createdTimeUtc lt ', variables('cutoffDateTime'), ' and properties/status ne ''Closed''')))}",
+                                "method": "GET",
+                                "authentication": {
+                                    "type": "ManagedServiceIdentity",
+                                    "audience": "https://management.azure.com/"
+                                }
+                            }
+                        },
+                        "Parse_Incidents": {
+                            "runAfter": {
+                                "List_Incidents_Older_Than_Cutoff_And_NotClosed": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ParseJson",
+                            "inputs": {
+                                "content": "@body('List_Incidents_Older_Than_Cutoff_And_NotClosed')",
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "value": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "name": {
+                                                        "type": "string"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "name"
+                                                ]
+                                            }
+                                        }
+                                    },
+                                    "required": [
+                                        "value"
+                                    ]
+                                }
+                            }
+                        },
+                        "For_Each_Incident": {
+                            "foreach": "@body('Parse_Incidents')?['value']",
+                            "actions": {
+                                "If_DryRun": {
+                                    "actions": {
+                                        "Append_To_DryRunList": {
+                                            "type": "AppendToArrayVariable",
+                                            "inputs": {
+                                                "name": "dryRunWouldClose",
+                                                "value": "@{items('For_Each_Incident')?['name']}"
+                                            }
+                                        }
+                                    },
+                                    "else": {
+                                        "actions": {
+                                            "Get_Incident": {
+                                                "type": "Http",
+                                                "inputs": {
+                                                    "uri": "@{concat('https://management.azure.com/subscriptions/', parameters('workspaceSubscriptionId'), '/resourceGroups/', parameters('workspaceResourceGroup'), '/providers/Microsoft.OperationalInsights/workspaces/', parameters('workspaceName'), '/providers/Microsoft.SecurityInsights/incidents/', items('For_Each_Incident')?['name'], '?api-version=', parameters('apiVersionSecurityInsights'))}",
+                                                    "method": "GET",
+                                                    "authentication": {
+                                                        "type": "ManagedServiceIdentity",
+                                                        "audience": "https://management.azure.com/"
+                                                    }
+                                                }
+                                            },
+                                            "Close_Incident": {
+                                                "runAfter": {
+                                                    "Get_Incident": [
+                                                        "Succeeded"
+                                                    ]
+                                                },
+                                                "type": "Http",
+                                                "inputs": {
+                                                    "uri": "@{concat('https://management.azure.com/subscriptions/', parameters('workspaceSubscriptionId'), '/resourceGroups/', parameters('workspaceResourceGroup'), '/providers/Microsoft.OperationalInsights/workspaces/', parameters('workspaceName'), '/providers/Microsoft.SecurityInsights/incidents/', items('For_Each_Incident')?['name'], '?api-version=', parameters('apiVersionSecurityInsights'))}",
+                                                    "method": "PUT",
+                                                    "headers": {
+                                                        "Content-Type": "application/json"
+                                                    },
+                                                    "body": {
+                                                        "properties": {
+                                                            "title": "@{body('Get_Incident')?['properties']?['title']}",
+                                                            "severity": "@{body('Get_Incident')?['properties']?['severity']}",
+                                                            "status": "Closed",
+                                                            "classification": "Undetermined",
+                                                            "classificationComment": "Auto-closed by logic app workflow (older than 7 days)"
+                                                        }
+                                                    },
+                                                    "authentication": {
+                                                        "type": "ManagedServiceIdentity",
+                                                        "audience": "https://management.azure.com/"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "equals": [
+                                                    "@parameters('dryRun')",
+                                                    false
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "type": "If"
+                                }
+                            },
+                            "runAfter": {
+                                "Parse_Incidents": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach",
+                            "runtimeConfiguration": {
+                                "concurrency": {
+                                    "repetitions": 5
+                                }
+                            }
+                        },
+                        "Initialize_DryRunList": {
+                            "runAfter": {},
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "cutoffDateTime",
+                                        "type": "string",
+                                        "value": "@{addDays(utcNow(), mul(-1, int(parameters('olderThanDays'))))}"
+                                    },
+                                    {
+                                        "name": "dryRunWouldClose",
+                                        "type": "array",
+                                        "value": []
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "outputs": {
+                        "cutoffDateTime": {
+                            "type": "String",
+                            "value": "@variables('cutoffDateTime')"
+                        },
+                        "dryRunWouldCloseIncidentIds": {
+                            "type": "Array",
+                            "value": "@variables('dryRunWouldClose')"
+                        }
+                    }
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {}
+                    }
+                }
+            }
+        }
+    ]
+}
