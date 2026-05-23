@@ -14,32 +14,55 @@ When a new Microsoft Sentinel incident is created, this playbook:
    - If Client: sends the email as a standard MDE alert
 
 ## Architecture
-Sentinel Incident Trigger
-│
-▼
-Get Incident + Extract Entities & Alerts
-│
-▼
-Compose HTML Email Body
-│
-▼
-Check Label (GT_MDE / GT_MDC / GT_MDO / GT_MDI)
-│
-▼
-Switch → Send Email per product route
-│ (MDE only)
-▼
-Advanced Hunting → Server or Client?
-├── Server → Send email + Update incident label
-└── Client → Send email
 
+Microsoft Sentinel Incident Trigger
+    ↓
+Get Incident + Extract Entities & Alerts
+    ↓
+Compose HTML Incident Email
+    ↓
+Check Incident Label
+    ↓
+Switch Routing Logic
+    ↓
+Advanced Hunting Query (MDE only)
+    ↓
+Server or Client Decision
+    ↓
+Send Email Notification
 
 ## Prerequisites
 
-- Microsoft Sentinel workspace
-- Microsoft Defender for Endpoint (MDE) connected to Sentinel
-- An Office 365 mailbox for sending notification emails
-- Deployment permissions on the target Azure Resource Group
+- Microsoft Sentinel enabled workspace
+- Microsoft Defender for Endpoint integrated with Sentinel
+- Office 365 mailbox for email notifications
+- Contributor access to Azure Resource Group
+
+## Parameters
+
+- PlaybookName
+- location
+- connections_azuresentinel_name
+- connections_office365_name
+- connections_wdatp_name
+- NotificationToEmail
+- NotificationFromEmail
+- ReportName
+- CompanyLogoLink
+
+## Post-Deployment Steps
+
+1. Authorize Office 365 API Connection
+2. Assign Sentinel Responder role to Managed Identity
+3. Configure Sentinel Automation Rule
+4. Apply Sentinel Labels for routing
+
+## Incident Labels
+
+GT_MDE → Microsoft Defender for Endpoint
+GT_MDC → Microsoft Defender for Cloud
+GT_MDO → Microsoft Defender for Office 365
+GT_MDI → Microsoft Defender for Identity
 
 ## Deployment
 
@@ -49,7 +72,7 @@ Advanced Hunting → Server or Client?
 
 > Replace `<YOUR_RAW_TEMPLATE_URL>` with the raw GitHub URL of `Incident-Assignment-Playbook.json`.
 
-### Deploy via Azure CLI
+## Deployment via Azure CLI
 
 ```bash
 az deployment group create \
@@ -61,14 +84,4 @@ az deployment group create \
       NotificationFromEmail="sentinel-alerts@yourcompany.com" \
       ReportName="Your Company SOC" \
       CompanyLogoLink="https://yourcompany.com/logo.png"
-
-### Deploy via PowerShell
-New-AzResourceGroupDeployment `
-  -ResourceGroupName "<YOUR_RESOURCE_GROUP>" `
-  -TemplateFile "Incident-Assignment-Playbook.json" `
-  -PlaybookName "Incident-Assignment-Playbook" `
-  -NotificationToEmail "soc-team@yourcompany.com" `
-  -NotificationFromEmail "sentinel-alerts@yourcompany.com" `
-  -ReportName "Your Company SOC" `
-  -CompanyLogoLink "https://yourcompany.com/logo.png"
 
