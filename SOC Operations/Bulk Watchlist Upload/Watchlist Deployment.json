@@ -1,0 +1,234 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workflows_WatchlistUpload_NonProd_name": {
+            "defaultValue": "WatchlistUpload_NonProd",
+            "type": "String"
+        },
+        "location": {
+            "defaultValue": "[resourceGroup().location]",
+            "type": "String"
+        },
+        "subscriptionID": {
+            "defaultValue": "[subscription().subscriptionId]",
+            "type": "String"
+        },
+        "resourceGroupName": {
+            "defaultValue": "[resourceGroup().name]",
+            "type": "String"
+        },
+        "workspaceName": {
+            "defaultValue": "",
+            "type": "String"
+        },
+        "sharepointConnectionName": {
+            "defaultValue": "sharepointonline-1",
+            "type": "String"
+        },
+        "sharePointSiteUrl": {
+            "defaultValue": "https://manpowergroupapps.sharepoint.com/teams/ProjectFestigenMPGMSCollaboration",
+            "type": "String"
+        },
+        "sharePointWatchlistFolder": {
+            "defaultValue": "/Shared Documents/Project Festigen/Sentinel/Use Case Analysis/Watchlists",
+            "type": "String"
+        },
+        "connections_sharepointonline_1_externalid": {
+            "defaultValue": "[resourceId('Microsoft.Web/connections', parameters('sharepointConnectionName'))]",
+            "type": "String"
+        }
+    },
+    "variables": {},
+    "resources": [
+        {
+            "type": "Microsoft.Web/connections",
+            "apiVersion": "2016-06-01",
+            "name": "[parameters('sharepointConnectionName')]",
+            "location": "[parameters('location')]",
+            "properties": {
+                "displayName": "[parameters('sharepointConnectionName')]",
+                "api": {
+                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', parameters('location'), '/managedApis/sharepointonline')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('workflows_WatchlistUpload_NonProd_name')]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', parameters('sharepointConnectionName'))]"
+            ],
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "subscriptionID": {
+                            "defaultValue": "[parameters('subscriptionID')]",
+                            "type": "String"
+                        },
+                        "resourceGroup": {
+                            "defaultValue": "[parameters('resourceGroupName')]",
+                            "type": "String"
+                        },
+                        "WorkspaceName": {
+                            "defaultValue": "[parameters('workspaceName')]",
+                            "type": "String"
+                        },
+                        "SharePointSiteUrl": {
+                            "defaultValue": "[parameters('sharePointSiteUrl')]",
+                            "type": "String"
+                        },
+                        "SharePointWatchlistFolder": {
+                            "defaultValue": "[parameters('sharePointWatchlistFolder')]",
+                            "type": "String"
+                        },
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "Recurrence": {
+                            "recurrence": {
+                                "interval": 12,
+                                "frequency": "Month"
+                            },
+                            "evaluatedRecurrence": {
+                                "interval": 12,
+                                "frequency": "Month"
+                            },
+                            "type": "Recurrence"
+                        }
+                    },
+                    "actions": {
+                        "For_each": {
+                            "foreach": "@body('List_folder')",
+                            "actions": {
+                                "csv_content": {
+                                    "runAfter": {
+                                        "Get_file_content_using_path": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Compose",
+                                    "inputs": "@replace(base64ToString(body('Get_file_content_using_path')?['$content']), decodeUriComponent('%EF%BB%BF'), '')"
+                                },
+                                "filename": {
+                                    "runAfter": {
+                                        "csv_content": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Compose",
+                                    "inputs": "@replace(last(split(items('For_each')?['Path'],'/')),'.','_')"
+                                },
+                                "alias": {
+                                    "runAfter": {
+                                        "filename": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Compose",
+                                    "inputs": "@{if(contains('0123456789', substring(outputs('filename'),0,1)), concat(join(take(skip(split(outputs('filename'),'_'),2),sub(length(split(outputs('filename'),'_')),3)),'_'),'_',join(take(split(outputs('filename'),'_'),2),'_'),'_csv'), outputs('filename'))}"
+                                },
+                                "HTTP": {
+                                    "runAfter": {
+                                        "alias": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Http",
+                                    "inputs": {
+                                        "uri": "https://management.azure.com/subscriptions/@{parameters('subscriptionID')}/resourceGroups/@{parameters('resourceGroup')}/providers/Microsoft.OperationalInsights/workspaces/@{parameters('WorkspaceName')}/providers/Microsoft.SecurityInsights/watchlists/@{outputs('alias')}?api-version=2025-09-01",
+                                        "method": "PUT",
+                                        "headers": {
+                                            "Content-Type": "application/json"
+                                        },
+                                        "body": {
+                                            "properties": {
+                                                "displayName": "@{outputs('alias')}",
+                                                "source": "@{outputs('alias')}",
+                                                "sourceType": "Local",
+                                                "provider": "Customer",
+                                                "description": "Watchlist from CSV content",
+                                                "numberOfLinesToSkip": 0,
+                                                "rawContent": "@{trim(replace(outputs('csv_content'), '\n', '\n'))}",
+                                                "itemsSearchKey": "@{trim(replace(first(split(outputs('csv_content'),',')),'\r',''))}",
+                                                "contentType": "text/csv"
+                                            }
+                                        },
+                                        "authentication": {
+                                            "type": "ManagedServiceIdentity"
+                                        }
+                                    },
+                                    "runtimeConfiguration": {
+                                        "contentTransfer": {
+                                            "transferMode": "Chunked"
+                                        }
+                                    }
+                                },
+                                "Get_file_content_using_path": {
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['sharepointonline-1']['connectionId']"
+                                            }
+                                        },
+                                        "method": "get",
+                                        "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('SharePointSiteUrl')))}/GetFileContentByPath",
+                                        "queries": {
+                                            "path": "@items('For_each')?['Path']",
+                                            "inferContentType": true,
+                                            "queryParametersSingleEncoded": true
+                                        }
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "List_folder": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "List_folder": {
+                            "runAfter": {},
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['sharepointonline-1']['connectionId']"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('SharePointSiteUrl')))}/folders/@{encodeURIComponent(encodeURIComponent(parameters('SharePointWatchlistFolder')))}"
+                            }
+                        }
+                    },
+                    "outputs": {}
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "sharepointonline-1": {
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', parameters('location'), '/managedApis/sharepointonline')]",
+                                "connectionId": "[parameters('connections_sharepointonline_1_externalid')]",
+                                "connectionName": "[parameters('sharepointConnectionName')]",
+                                "connectionProperties": {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}
