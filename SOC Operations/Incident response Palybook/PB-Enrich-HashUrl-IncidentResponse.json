@@ -1,0 +1,747 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workflows_PB_Enrich_HashUrl_IncidentResponse_name": {
+            "defaultValue": "PB-Enrich-HashUrl-IncidentResponse",
+            "type": "String"
+        },
+        "location": {
+            "defaultValue": "[resourceGroup().location]",
+            "type": "String"
+        },
+        "azuresentinelConnectionName": {
+            "defaultValue": "azuresentinel-incidentresponse",
+            "type": "String"
+        },
+        "azuremonitorlogsConnectionName": {
+            "defaultValue": "azuremonitorlogs-2",
+            "type": "String"
+        },
+        "connections_azuresentinel_2_externalid": {
+            "defaultValue": "[resourceId('Microsoft.Web/connections', parameters('azuresentinelConnectionName'))]",
+            "type": "String"
+        },
+        "connections_azuremonitorlogs_1_externalid": {
+            "defaultValue": "[resourceId('Microsoft.Web/connections', parameters('azuremonitorlogsConnectionName'))]",
+            "type": "String"
+        }
+    },
+    "variables": {},
+    "resources": [
+        {
+            "type": "Microsoft.Web/connections",
+            "apiVersion": "2016-06-01",
+            "name": "[parameters('azuresentinelConnectionName')]",
+            "location": "[parameters('location')]",
+            "kind": "V1",
+            "properties": {
+                "displayName": "[parameters('azuresentinelConnectionName')]",
+                "api": {
+                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', parameters('location'), '/managedApis/azuresentinel')]"
+                },
+                "parameterValues": {}
+            }
+        },
+        {
+            "type": "Microsoft.Web/connections",
+            "apiVersion": "2016-06-01",
+            "name": "[parameters('azuremonitorlogsConnectionName')]",
+            "location": "[parameters('location')]",
+            "kind": "V1",
+            "properties": {
+                "displayName": "[parameters('azuremonitorlogsConnectionName')]",
+                "api": {
+                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', parameters('location'), '/managedApis/azuremonitorlogs')]"
+                },
+                "parameterValues": {}
+            }
+        },
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('workflows_PB_Enrich_HashUrl_IncidentResponse_name')]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', parameters('azuresentinelConnectionName'))]",
+                "[resourceId('Microsoft.Web/connections', parameters('azuremonitorlogsConnectionName'))]"
+            ],
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "metadata": {
+                        "notes": {}
+                    },
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "MaliciousThreshold": {
+                            "defaultValue": 1,
+                            "type": "Int"
+                        },
+                        "VTApiKey": {
+                            "defaultValue": "\"\"",
+                            "type": "SecureString"
+                        },
+                        "PhishTankAppKey": {
+                            "defaultValue": "\"\"",
+                            "type": "String"
+                        },
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "Microsoft_Sentinel_incident": {
+                            "type": "ApiConnectionWebhook",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                    }
+                                },
+                                "body": {
+                                    "callback_url": "@listCallbackUrl()"
+                                },
+                                "path": "/incident-creation"
+                            }
+                        }
+                    },
+                    "actions": {
+                        "Initialize_Variables": {
+                            "runAfter": {},
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "MaliciousHashes",
+                                        "type": "array",
+                                        "value": []
+                                    },
+                                    {
+                                        "name": "MaliciousUrls",
+                                        "type": "array",
+                                        "value": []
+                                    },
+                                    {
+                                        "name": "CheckedHashes",
+                                        "type": "array",
+                                        "value": []
+                                    },
+                                    {
+                                        "name": "CheckedUrls",
+                                        "type": "array",
+                                        "value": []
+                                    },
+                                    {
+                                        "name": "ContainmentSummary",
+                                        "type": "string",
+                                        "value": "\"\""
+                                    }
+                                ]
+                            }
+                        },
+                        "Entities_-_Get_FileHashes": {
+                            "runAfter": {
+                                "Initialize_Variables": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": "@triggerBody()?['object']?['properties']?['relatedEntities']",
+                                "path": "/entities/filehash"
+                            }
+                        },
+                        "Entities_-_Get_URLs": {
+                            "runAfter": {
+                                "Entities_-_Get_FileHashes": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": "@triggerBody()?['object']?['properties']?['relatedEntities']",
+                                "path": "/entities/url"
+                            }
+                        },
+                        "Entities_-_Get_Hosts": {
+                            "runAfter": {
+                                "Entities_-_Get_URLs": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": "@triggerBody()?['object']?['properties']?['relatedEntities']",
+                                "path": "/entities/host"
+                            }
+                        },
+                        "Entities_-_Get_Accounts": {
+                            "runAfter": {
+                                "Entities_-_Get_Hosts": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": "@triggerBody()?['object']?['properties']?['relatedEntities']",
+                                "path": "/entities/account"
+                            }
+                        },
+                        "For_each_Hash": {
+                            "foreach": "@coalesce(body('Entities_-_Get_FileHashes')?['Filehashes'], createArray())",
+                            "actions": {
+                                "Compose_HashValue": {
+                                    "type": "Compose",
+                                    "inputs": "@coalesce(item()?['HashValue'], item()?['Value'], item()?['hash'])"
+                                },
+                                "Append_CheckedHash": {
+                                    "runAfter": {
+                                        "Compose_HashValue": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": {
+                                        "name": "CheckedHashes",
+                                        "value": "@outputs('Compose_HashValue')"
+                                    }
+                                },
+                                "VT_Get_File_Report": {
+                                    "runAfter": {
+                                        "Append_CheckedHash": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Http",
+                                    "inputs": {
+                                        "uri": "@concat('https://www.virustotal.com/api/v3/files/', outputs('Compose_HashValue'))",
+                                        "method": "GET",
+                                        "headers": {
+                                            "x-apikey": "@parameters('VTApiKey')"
+                                        }
+                                    }
+                                },
+                                "If_File_Malicious": {
+                                    "actions": {
+                                        "Append_MaliciousHash": {
+                                            "type": "AppendToArrayVariable",
+                                            "inputs": {
+                                                "name": "MaliciousHashes",
+                                                "value": "@outputs('Compose_HashValue')"
+                                            }
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "VT_Get_File_Report": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "else": {
+                                        "actions": {}
+                                    },
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "greater": [
+                                                    "@int(body('VT_Get_File_Report')?['data']?['attributes']?['last_analysis_stats']?['malicious'])",
+                                                    "@add(\n  int(body('VT_Get_File_Report')?['data']?['attributes']?['last_analysis_stats']?['harmless']),\n  int(body('VT_Get_File_Report')?['data']?['attributes']?['last_analysis_stats']?['suspicious'])\n)"
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "type": "If"
+                                }
+                            },
+                            "runAfter": {
+                                "Entities_-_Get_Accounts": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "For_each_URL": {
+                            "foreach": "@coalesce(body('Entities_-_Get_URLs')?['URLs'], createArray())",
+                            "actions": {
+                                "Compose_UrlValue": {
+                                    "type": "Compose",
+                                    "inputs": "@coalesce(item()?['Url'], item()?['Value'], item()?['UrlValue'])"
+                                },
+                                "Append_CheckedUrl": {
+                                    "runAfter": {
+                                        "Compose_UrlValue": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": {
+                                        "name": "CheckedUrls",
+                                        "value": "@outputs('Compose_UrlValue')"
+                                    }
+                                },
+                                "If_URL_Malicious": {
+                                    "actions": {
+                                        "Append_MaliciousUrl": {
+                                            "type": "AppendToArrayVariable",
+                                            "inputs": {
+                                                "name": "MaliciousUrls",
+                                                "value": "@outputs('Compose_UrlValue')"
+                                            }
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "PhishTank_URL_check": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "else": {
+                                        "actions": {}
+                                    },
+                                    "expression": {
+                                        "or": [
+                                            {
+                                                "equals": [
+                                                    "@toLower(string(body('PhishTank_URL_check')?['results']?['url0']?['valid']))",
+                                                    true
+                                                ]
+                                            },
+                                            {
+                                                "equals": [
+                                                    "@toLower(string(body('PhishTank_URL_check')?['results']?['url0']?['valid']))",
+                                                    "y"
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "type": "If"
+                                },
+                                "PhishTank_URL_check": {
+                                    "runAfter": {
+                                        "Append_CheckedUrl": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Http",
+                                    "inputs": {
+                                        "uri": "https://checkurl.phishtank.com/checkurl/",
+                                        "method": "POST",
+                                        "headers": {
+                                            "Content-Type": "application/x-www-form-urlencoded",
+                                            "User-Agent": "phishtank/manpowergroup-sentinel-soar"
+                                        },
+                                        "body": "url=@{outputs('Compose_UrlValue')}&format=json&app_key=@{parameters('PhishTankAppKey')}"
+                                    },
+                                    "runtimeConfiguration": {
+                                        "contentTransfer": {
+                                            "transferMode": "Chunked"
+                                        }
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "For_each_Hash": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "Condition_Containment_If_Malicious": {
+                            "actions": {
+                                "Get_incident": {
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                            }
+                                        },
+                                        "method": "post",
+                                        "body": {
+                                            "incidentArmId": "@{triggerBody()?['object']?['properties']?['incidentNumber']}"
+                                        },
+                                        "path": "/Incidents"
+                                    }
+                                },
+                                "Compose_DefenderIncidentId": {
+                                    "runAfter": {
+                                        "Get_incident": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Compose",
+                                    "inputs": "@body('Get_incident')?['properties']?['providerIncidentId']"
+                                },
+                                "HTTP": {
+                                    "runAfter": {
+                                        "Compose_DefenderIncidentId": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Http",
+                                    "inputs": {
+                                        "uri": "https://api.security.microsoft.com/api/incidents/@{outputs('Compose_DefenderIncidentId')}",
+                                        "method": "GET",
+                                        "headers": {
+                                            " Content-Type": "application/json"
+                                        }
+                                    },
+                                    "runtimeConfiguration": {
+                                        "contentTransfer": {
+                                            "transferMode": "Chunked"
+                                        }
+                                    }
+                                },
+                                "Compose_NetworkMessageId": {
+                                    "runAfter": {
+                                        "HTTP": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Compose",
+                                    "inputs": "@first(\n  first(body('HTTP')?['alerts'])?['evidence']\n)?['networkMessageId']"
+                                },
+                                "Condition_1": {
+                                    "actions": {
+                                        "HTTP_1": {
+                                            "type": "Http",
+                                            "inputs": {
+                                                "uri": "https://api.security.microsoft.com/api/email/remediation",
+                                                "method": "POST",
+                                                "headers": {
+                                                    "Content-Type": "application/json"
+                                                },
+                                                "body": {
+                                                    "messageIds": [
+                                                        "@{outputs('Compose_NetworkMessageId')}"
+                                                    ],
+                                                    "action": "HardDelete"
+                                                },
+                                                "authentication": {
+                                                    "type": "ManagedServiceIdentity"
+                                                }
+                                            },
+                                            "runtimeConfiguration": {
+                                                "contentTransfer": {
+                                                    "transferMode": "Chunked"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Compose_NetworkMessageId": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "else": {
+                                        "actions": {}
+                                    },
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "not": {
+                                                    "equals": [
+                                                        "@outputs('Compose_NetworkMessageId')",
+                                                        ""
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    "type": "If"
+                                },
+                                "For_each_Device": {
+                                    "foreach": "@coalesce(body('Entities_-_Get_Hosts')?['Hosts'], createArray())",
+                                    "actions": {
+                                        "Compose_HostForLookup": {
+                                            "type": "Compose",
+                                            "inputs": "@toLower(coalesce(items('For_each_Device')?['HostName'], items('For_each_Device')?['NetBiosName']))"
+                                        },
+                                        "HTTP_GetMachine": {
+                                            "runAfter": {
+                                                "Compose_HostForLookup": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "Http",
+                                            "inputs": {
+                                                "uri": "https://api.security.microsoft.com/api/machines?$filter=startswith(computerDnsName,'@{outputs('Compose_HostForLookup')}')&$top=1",
+                                                "method": "GET",
+                                                "authentication": {
+                                                    "type": "ManagedServiceIdentity",
+                                                    "audience": "https://api.securitycenter.microsoft.com"
+                                                }
+                                            },
+                                            "runtimeConfiguration": {
+                                                "contentTransfer": {
+                                                    "transferMode": "Chunked"
+                                                }
+                                            }
+                                        },
+                                        "Compose_MachineId": {
+                                            "runAfter": {
+                                                "HTTP_GetMachine": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "Compose",
+                                            "inputs": "@first(body('HTTP_GetMachine')?['value'])?['id']"
+                                        },
+                                        "If_Machine_Found": {
+                                            "actions": {
+                                                "HTTP_IsolateMachine": {
+                                                    "type": "Http",
+                                                    "inputs": {
+                                                        "uri": "https://api.security.microsoft.com/api/machines/@{outputs('Compose_MachineId')}/isolate",
+                                                        "method": "POST",
+                                                        "headers": {
+                                                            "Content-Type": "application/json"
+                                                        },
+                                                        "body": {
+                                                            "Comment": "Isolated automatically by Sentinel SOAR after confirmed malicious IOC.",
+                                                            "IsolationType": "Full"
+                                                        },
+                                                        "authentication": {
+                                                            "type": "ManagedServiceIdentity",
+                                                            "audience": "https://api.securitycenter.microsoft.com"
+                                                        }
+                                                    },
+                                                    "runtimeConfiguration": {
+                                                        "contentTransfer": {
+                                                            "transferMode": "Chunked"
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            "runAfter": {
+                                                "Compose_MachineId": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "else": {
+                                                "actions": {}
+                                            },
+                                            "expression": {
+                                                "and": [
+                                                    {
+                                                        "not": {
+                                                            "equals": [
+                                                                "@coalesce(outputs('Compose_MachineId'),'')",
+                                                                ""
+                                                            ]
+                                                        }
+                                                    }
+                                                ]
+                                            },
+                                            "type": "If"
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Condition_1": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Foreach"
+                                }
+                            },
+                            "runAfter": {
+                                "For_each_URL": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "else": {
+                                "actions": {}
+                            },
+                            "expression": {
+                                "or": [
+                                    {
+                                        "greater": [
+                                            "@length(variables('MaliciousHashes'))",
+                                            0
+                                        ]
+                                    },
+                                    {
+                                        "greater": [
+                                            "@length(variables('MaliciousUrls'))",
+                                            0
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "Condition_DoUserContainment": {
+                            "actions": {
+                                "For_each_Accounts": {
+                                    "foreach": "@body('Entities_-_Get_Accounts')?['Accounts']",
+                                    "actions": {
+                                        "Compose_UserUPN": {
+                                            "type": "Compose",
+                                            "inputs": "@{coalesce(\n  items('For_each_Accounts')?['UserPrincipalName'],\n  concat(\n    items('For_each_Accounts')?['Name'],\n    '@',\n    items('For_each_Accounts')?['UPNSuffix']\n  )\n)}\n)"
+                                        },
+                                        "HTTP_-RevokeSignInSessions": {
+                                            "runAfter": {
+                                                "Compose_UserUPN": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "Http",
+                                            "inputs": {
+                                                "uri": "https://graph.microsoft.com/v1.0/users/@{outputs('Compose_UserUPN')}/revokeSignInSessions",
+                                                "method": "POST",
+                                                "headers": {
+                                                    "Content-Type": "application/json\n"
+                                                },
+                                                "authentication": {
+                                                    "type": "ManagedServiceIdentity",
+                                                    "audience": "https://graph.microsoft.com"
+                                                }
+                                            },
+                                            "runtimeConfiguration": {
+                                                "contentTransfer": {
+                                                    "transferMode": "Chunked"
+                                                }
+                                            }
+                                        },
+                                        "HTTP_3": {
+                                            "runAfter": {
+                                                "HTTP_-RevokeSignInSessions": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "Http",
+                                            "inputs": {
+                                                "uri": "https://graph.microsoft.com/v1.0/users/@{outputs('Compose_UserUPN')}",
+                                                "method": "PATCH",
+                                                "headers": {
+                                                    "Content-Type": " application/json"
+                                                },
+                                                "body": {
+                                                    "passwordProfile": {
+                                                        "forceChangePasswordNextSignIn": true
+                                                    }
+                                                },
+                                                "authentication": {
+                                                    "type": "ManagedServiceIdentity",
+                                                    "audience": "https://graph.microsoft.com\n"
+                                                }
+                                            },
+                                            "runtimeConfiguration": {
+                                                "contentTransfer": {
+                                                    "transferMode": "Chunked"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "type": "Foreach"
+                                }
+                            },
+                            "runAfter": {
+                                "Condition_Containment_If_Malicious": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "else": {
+                                "actions": {}
+                            },
+                            "expression": {
+                                "or": [
+                                    {
+                                        "greater": [
+                                            "@length(variables('MaliciousHashes'))",
+                                            0
+                                        ]
+                                    },
+                                    {
+                                        "greater": [
+                                            "@length(variables('MaliciousUrls'))",
+                                            0
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "Compose_Comment_HTML": {
+                            "runAfter": {
+                                "Condition_DoUserContainment": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Compose",
+                            "inputs": "@concat(\n  '<p><b>VirusTotal enrichment</b></p>',\n  '<p><b>Checked Hashes:</b> ', string(length(variables('CheckedHashes'))), '</p>',\n  '<p><b>Malicious Hashes:</b> ', string(length(variables('MaliciousHashes'))), '</p>',\n  if(\n    greater(length(variables('MaliciousHashes')), 0),\n    concat('<p>', join(variables('MaliciousHashes'), '<br>'), '</p>'),\n    '<p>None flagged as malicious</p>'\n  ),\n  '<p><b>Checked URLs:</b> ', string(length(variables('CheckedUrls'))), '</p>',\n  '<p><b>Malicious URLs:</b> ', string(length(variables('MaliciousUrls'))), '</p>',\n  if(\n    greater(length(variables('MaliciousUrls')), 0),\n    concat('<p>', join(variables('MaliciousUrls'), '<br>'), '</p>'),\n    '<p>None flagged as malicious</p>'\n  ),\n  '<p><i>Threshold: malicious &gt;= ',\n  string(parameters('MaliciousThreshold')),\n  '</i></p>'\n)"
+                        },
+                        "Add_comment_to_incident_(V3)": {
+                            "runAfter": {
+                                "Compose_Comment_HTML": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": {
+                                    "incidentArmId": "@triggerBody()?['object']?['id']",
+                                    "message": "<p class=\"editor-paragraph\">@{outputs('Compose_Comment_HTML')}</p>"
+                                },
+                                "path": "/Incidents/Comment"
+                            }
+                        }
+                    },
+                    "outputs": {}
+                },
+                "parameters": {
+                    "VTApiKey": {},
+                    "PhishTankAppKey": {},
+                    "$connections": {
+                        "value": {
+                            "azuresentinel": {
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', parameters('location'), '/managedApis/azuresentinel')]",
+                                "connectionId": "[parameters('connections_azuresentinel_2_externalid')]",
+                                "connectionName": "[parameters('azuresentinelConnectionName')]"
+                            },
+                            "azuremonitorlogs-1": {
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', parameters('location'), '/managedApis/azuremonitorlogs')]",
+                                "connectionId": "[parameters('connections_azuremonitorlogs_1_externalid')]",
+                                "connectionName": "[parameters('azuremonitorlogsConnectionName')]"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}
